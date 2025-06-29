@@ -2,3 +2,5 @@ Flask
 google-generativeai
 Flask-Cors
 gunicorn
+Flask-SQLAlchemy
+psycopg2-binary
