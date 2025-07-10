@@ -9,28 +9,29 @@ from flask_sqlalchemy import SQLAlchemy
 # 1. Ініціалізація Flask та CORS
 # ====================================================================
 app = Flask(__name__)
-CORS(app)
+
+# === ЗМІНЕНО: Більш точне налаштування CORS ===
+# Дозволяємо запити до /api/* тільки з вашого фронтенд-сайту vet25ua
+CORS(app, resources={r"/api/*": {"origins": "https://vet25ua.onrender.com"}})
+
 
 # ====================================================================
-# 2. НОВЕ: Налаштування бази даних
+# 2. Налаштування бази даних
 # ====================================================================
-# Ми беремо посилання на базу даних з середовища, яке ви налаштували на Render
 app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # ====================================================================
-# 3. НОВЕ: Визначення моделей бази даних
-# Щоб цей сервіс знав структуру таблиць, куди він буде писати дані
+# 3. Визначення моделей бази даних
 # ====================================================================
 class User(db.Model):
-    __tablename__ = 'user' # Явно вказуємо ім'я таблиці
+    __tablename__ = 'user'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    # Інші поля нам тут не потрібні, головне - id та username
 
 class ChatLog(db.Model):
-    __tablename__ = 'chat_log' # Явно вказуємо ім'я таблиці
+    __tablename__ = 'chat_log'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     timestamp = db.Column(db.DateTime, index=True, default=lambda: datetime.datetime.now(datetime.UTC))
@@ -71,14 +72,13 @@ model = genai.GenerativeModel(
 )
 
 # ====================================================================
-# 5. Маршрути (головний маршрут ЗМІНЕНО)
+# 5. Маршрути
 # ====================================================================
 @app.route('/api/chat', methods=['POST'])
 def chat():
     if not api_key:
         return jsonify({"error": "API ключ не налаштовано на сервері."}), 500
 
-    # ЗМІНЕНО: Отримуємо не тільки повідомлення, а й ID користувача
     data = request.json
     user_message = data.get("message")
     user_id = data.get("user_id")
@@ -87,15 +87,12 @@ def chat():
         return jsonify({"error": "Повідомлення та ID користувача є обов'язковими"}), 400
 
     try:
-        # Отримуємо відповідь від Gemini
         chat_session = model.start_chat()
         response = chat_session.send_message(user_message)
         bot_response_text = response.text
 
-        # НОВЕ: Зберігаємо лог у базу даних
         try:
             with app.app_context():
-                # Перевіряємо, чи існує такий користувач
                 user = db.session.get(User, user_id)
                 if user:
                     new_log = ChatLog(
@@ -108,10 +105,8 @@ def chat():
                 else:
                     print(f"ПОПЕРЕДЖЕННЯ: Користувача з ID {user_id} не знайдено. Лог не збережено.")
         except Exception as db_error:
-            # Не перериваємо роботу бота, якщо не вдалося зберегти лог
             print(f"ПОМИЛКА збереження логу в БД: {db_error}")
 
-        # Повертаємо відповідь користувачу
         return jsonify({"reply": bot_response_text})
 
     except Exception as e:
