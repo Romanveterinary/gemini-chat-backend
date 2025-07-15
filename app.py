@@ -14,7 +14,7 @@ from a2wsgi import ASGIMiddleware # <--- ДОДАНО ІМПОРТ
 app = Flask(__name__)
 basedir = os.path.abspath(os.path.dirname(__file__))
 
-CORS(app, resources={r"/api/*": {"origins": "https://vet25ua.onrender.com"}})
+CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 # ====================================================================
 # 2. Налаштування бази даних
