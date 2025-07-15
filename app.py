@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 import traceback
-import asyncio
+import asyncio # Додано новий імпорт
 
 # ====================================================================
 # 1. Ініціалізація Flask та CORS
@@ -62,7 +62,7 @@ def find_relevant_laws(query):
                             found_fragments.append(f"З документу '{filename}':\n---\n{p}\n---\n")
             except Exception as e:
                 print(f"Помилка читання файлу {filename}: {e}")
-    
+
     return "\n".join(found_fragments)
 
 # ====================================================================
@@ -78,10 +78,10 @@ else:
 generation_config = {"temperature": 0.7, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
 
 # ====================================================================
-# 6. Основний маршрут чату (Оновлено для асинхронності)
+# 6. Основний маршрут чату (Оновлено на синхронний)
 # ====================================================================
 @app.route('/api/chat', methods=['POST'])
-async def chat():
+def chat(): # ЗМІНЕНО: прибрали async
     if not api_key:
         return jsonify({"error": "API ключ не налаштовано на сервері."}), 500
 
@@ -93,10 +93,8 @@ async def chat():
         return jsonify({"error": "Повідомлення та ID користувача є обов'язковими"}), 400
 
     try:
-        # Крок 1: Знайти релевантні закони (це залишається синхронним, бо це швидка операція з файлами)
         retrieved_context = find_relevant_laws(user_message)
 
-        # Крок 2: Сформувати системний промпт
         system_instruction = f"""Ти — експертний віртуальний консультант для сайту vet25ua.onrender.com. Твоя спеціалізація — ветеринарія та законодавство України.
 Відповідай на запитання користувача, базуючись в першу чергу на НАДАНОМУ КОНТЕКСТІ. Якщо контекст релевантний, посилайся на нього.
 Якщо запитання не стосується ветеринарії, харчової промисловості або законодавства у цих сферах, ввічливо відмов.
@@ -104,19 +102,17 @@ async def chat():
 **НАДАНИЙ КОНТЕКСТ ІЗ ЗАКОНОДАВСТВА:**
 {retrieved_context if retrieved_context else "Для цього запиту релевантних документів у локальній базі знань не знайдено."}
 """
-        
-        # Крок 3: Асинхронно надіслати запит до Gemini, щоб уникнути таймауту
+
         model = genai.GenerativeModel(
             model_name="gemini-1.5-flash",
             generation_config=generation_config,
             system_instruction=system_instruction
         )
-        # Використовуємо асинхронну версію функції
-        response = await model.generate_content_async(user_message)
+
+        # ЗМІНЕНО: Запускаємо асинхронну функцію в окремому циклі
+        response = asyncio.run(model.generate_content_async(user_message))
         bot_response_text = response.text
 
-        # Крок 4: Зберегти лог у базу даних
-        # Це краще робити після відправки відповіді користувачу, щоб не затримувати його
         try:
             with app.app_context():
                 user = db.session.get(User, user_id)
@@ -149,5 +145,4 @@ def index():
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    # Для локального запуску, Gunicorn буде використовуватися на Render
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
