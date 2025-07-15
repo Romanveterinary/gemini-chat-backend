@@ -6,6 +6,7 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 import traceback
 import asyncio
+from a2wsgi import ASGIMiddleware # <--- ДОДАНО ІМПОРТ
 
 # ====================================================================
 # 1. Ініціалізація Flask та CORS
@@ -47,7 +48,7 @@ def find_relevant_laws(query):
     legislation_dir = os.path.join(basedir, 'legislation')
     if not os.path.exists(legislation_dir):
         return ""
-    
+
     query_words = set(query.lower().split())
     found_fragments = []
 
@@ -78,10 +79,10 @@ else:
 generation_config = {"temperature": 0.7, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
 
 # ====================================================================
-# 6. Основний маршрут чату (повертаємо до async)
+# 6. Основний маршрут чату
 # ====================================================================
 @app.route('/api/chat', methods=['POST'])
-async def chat(): # ПОВЕРНУЛИ ASYNC
+async def chat():
     if not api_key:
         return jsonify({"error": "API ключ не налаштовано на сервері."}), 500
 
@@ -109,7 +110,6 @@ async def chat(): # ПОВЕРНУЛИ ASYNC
             system_instruction=system_instruction
         )
         
-        # ПОВЕРНУЛИ ПРЯМИЙ AWAIT
         response = await model.generate_content_async(user_message)
         bot_response_text = response.text
 
@@ -140,8 +140,12 @@ def index():
     return "Бекенд чат-бота працює!"
 
 # ====================================================================
-# 7. Запуск додатку
+# 7. Запуск додатку та Адаптер для ASGI
 # ====================================================================
+
+# Створюємо "перекладач" для Gunicorn/Uvicorn
+asgi_app = ASGIMiddleware(app)
+
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()

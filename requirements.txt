@@ -5,3 +5,4 @@ gunicorn
 Flask-SQLAlchemy
 psycopg2-binary
 uvicorn
+a2wsgi
