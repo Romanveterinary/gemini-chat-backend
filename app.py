@@ -4,16 +4,16 @@ import google.generativeai as genai
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
+import traceback
+import asyncio
 
 # ====================================================================
 # 1. Ініціалізація Flask та CORS
 # ====================================================================
 app = Flask(__name__)
+basedir = os.path.abspath(os.path.dirname(__file__))
 
-# === ЗМІНЕНО: Більш точне налаштування CORS ===
-# Дозволяємо запити до /api/* тільки з вашого фронтенд-сайту vet25ua
 CORS(app, resources={r"/api/*": {"origins": "https://vet25ua.onrender.com"}})
-
 
 # ====================================================================
 # 2. Налаштування бази даних
@@ -23,7 +23,7 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # ====================================================================
-# 3. Визначення моделей бази даних
+# 3. Моделі бази даних
 # ====================================================================
 class User(db.Model):
     __tablename__ = 'user'
@@ -37,10 +37,36 @@ class ChatLog(db.Model):
     timestamp = db.Column(db.DateTime, index=True, default=lambda: datetime.datetime.now(datetime.UTC))
     user_prompt = db.Column(db.Text, nullable=False)
     bot_response = db.Column(db.Text, nullable=True)
+    retrieved_context = db.Column(db.Text, nullable=True)
     user = db.relationship('User', backref=db.backref('chat_logs_backend', lazy='dynamic'))
 
 # ====================================================================
-# 4. Налаштування Gemini
+# 4. Логіка Пошуку по Законах
+# ====================================================================
+def find_relevant_laws(query):
+    legislation_dir = os.path.join(basedir, 'legislation')
+    if not os.path.exists(legislation_dir):
+        return ""
+
+    query_words = set(query.lower().split())
+    found_fragments = []
+
+    for filename in os.listdir(legislation_dir):
+        if filename.endswith(".txt"):
+            try:
+                with open(os.path.join(legislation_dir, filename), 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    paragraphs = content.split('\n\n')
+                    for p in paragraphs:
+                        if any(word in p.lower() for word in query_words):
+                            found_fragments.append(f"З документу '{filename}':\n---\n{p}\n---\n")
+            except Exception as e:
+                print(f"Помилка читання файлу {filename}: {e}")
+    
+    return "\n".join(found_fragments)
+
+# ====================================================================
+# 5. Налаштування Gemini
 # ====================================================================
 api_key = os.getenv("GEMINI_API_KEY")
 
@@ -49,33 +75,13 @@ if api_key:
 else:
     print("ПОПЕРЕДЖЕННЯ: Змінна середовища GEMINI_API_KEY не встановлена.")
 
-generation_config = {"temperature": 0.9, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    generation_config=generation_config,
-    system_instruction="""Ти — експертний віртуальний консультант для сайту vet25ua.onrender.com.
-Твоя спеціалізація — ветеринарія та безпека харчових продуктів. Відповідай виключно на запитання, пов'язані з:
-- Ветеринарними препаратами, хворобами тварин.
-- Нормами та стандартами харчової промисловості (ДСТУ, ISO, HACCP), а також з можливістю прописувати процедури HACCP.
-- Технологіями виробництва та зберігання продуктів в Україні та Євросоюзі.
-- Рекомендаціями щодо продажів в Україні та Євросоюзі.
-- Клінічними ознаками хворих органів туш тварин, тушок птиці, качок, кролів, індиків, курей.
-- Цінами на сільськогосподарську продукцію в Україні та Євросоюзі, аналізом та рекомендаціями для продажу.
-- Аналізом хвороб бджіл та їх паразитів, рекомендаціями по лікуванню та усуненню хвороб.
-- Способами обробки меду, методами зберігання та стандартами України та Євросоюзу.
-- Рекомендаціями щодо кращого продажу меду і супутніх матеріалів (віск, пилок, перга, маточне молочко, тощо).
-- Цінами на продукцію бджільництва в Україні та за кордоном.
-- Законодавством України, Євросоюзу та інших країн щодо ветеринарії та експертизи м'яса.Закони та інструкції по хворобам сг тварин України.
-
-Якщо запитання не стосується цих тем, ввічливо відмовляй у відповіді, пояснюючи свою спеціалізацію. Наприклад: 'Вибачте, я можу консультувати лише з питань ветеринарії та харчової промисловості'.
-"""
-)
+generation_config = {"temperature": 0.7, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
 
 # ====================================================================
-# 5. Маршрути
+# 6. Основний маршрут чату (Оновлено для асинхронності)
 # ====================================================================
 @app.route('/api/chat', methods=['POST'])
-def chat():
+async def chat():
     if not api_key:
         return jsonify({"error": "API ключ не налаштовано на сервері."}), 500
 
@@ -87,10 +93,30 @@ def chat():
         return jsonify({"error": "Повідомлення та ID користувача є обов'язковими"}), 400
 
     try:
-        chat_session = model.start_chat()
-        response = chat_session.send_message(user_message)
+        # Крок 1: Знайти релевантні закони (це залишається синхронним, бо це швидка операція з файлами)
+        retrieved_context = find_relevant_laws(user_message)
+
+        # Крок 2: Сформувати системний промпт
+        system_instruction = f"""Ти — експертний віртуальний консультант для сайту vet25ua.onrender.com. Твоя спеціалізація — ветеринарія та законодавство України.
+Відповідай на запитання користувача, базуючись в першу чергу на НАДАНОМУ КОНТЕКСТІ. Якщо контекст релевантний, посилайся на нього.
+Якщо запитання не стосується ветеринарії, харчової промисловості або законодавства у цих сферах, ввічливо відмов.
+
+**НАДАНИЙ КОНТЕКСТ ІЗ ЗАКОНОДАВСТВА:**
+{retrieved_context if retrieved_context else "Для цього запиту релевантних документів у локальній базі знань не знайдено."}
+"""
+        
+        # Крок 3: Асинхронно надіслати запит до Gemini, щоб уникнути таймауту
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-flash",
+            generation_config=generation_config,
+            system_instruction=system_instruction
+        )
+        # Використовуємо асинхронну версію функції
+        response = await model.generate_content_async(user_message)
         bot_response_text = response.text
 
+        # Крок 4: Зберегти лог у базу даних
+        # Це краще робити після відправки відповіді користувачу, щоб не затримувати його
         try:
             with app.app_context():
                 user = db.session.get(User, user_id)
@@ -98,23 +124,30 @@ def chat():
                     new_log = ChatLog(
                         user_id=user_id,
                         user_prompt=user_message,
-                        bot_response=bot_response_text
+                        bot_response=bot_response_text,
+                        retrieved_context=retrieved_context
                     )
                     db.session.add(new_log)
                     db.session.commit()
-                else:
-                    print(f"ПОПЕРЕДЖЕННЯ: Користувача з ID {user_id} не знайдено. Лог не збережено.")
         except Exception as db_error:
             print(f"ПОМИЛКА збереження логу в БД: {db_error}")
+            traceback.print_exc()
 
         return jsonify({"reply": bot_response_text})
 
     except Exception as e:
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/')
 def index():
     return "Бекенд чат-бота працює!"
 
+# ====================================================================
+# 7. Запуск додатку
+# ====================================================================
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
+    # Для локального запуску, Gunicorn буде використовуватися на Render
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
