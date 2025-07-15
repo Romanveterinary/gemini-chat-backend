@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 import traceback
-import asyncio # Додано новий імпорт
+import asyncio
 
 # ====================================================================
 # 1. Ініціалізація Flask та CORS
@@ -47,7 +47,7 @@ def find_relevant_laws(query):
     legislation_dir = os.path.join(basedir, 'legislation')
     if not os.path.exists(legislation_dir):
         return ""
-
+    
     query_words = set(query.lower().split())
     found_fragments = []
 
@@ -62,7 +62,7 @@ def find_relevant_laws(query):
                             found_fragments.append(f"З документу '{filename}':\n---\n{p}\n---\n")
             except Exception as e:
                 print(f"Помилка читання файлу {filename}: {e}")
-
+    
     return "\n".join(found_fragments)
 
 # ====================================================================
@@ -78,10 +78,10 @@ else:
 generation_config = {"temperature": 0.7, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
 
 # ====================================================================
-# 6. Основний маршрут чату (Оновлено на синхронний)
+# 6. Основний маршрут чату (повертаємо до async)
 # ====================================================================
 @app.route('/api/chat', methods=['POST'])
-def chat(): # ЗМІНЕНО: прибрали async
+async def chat(): # ПОВЕРНУЛИ ASYNC
     if not api_key:
         return jsonify({"error": "API ключ не налаштовано на сервері."}), 500
 
@@ -102,15 +102,15 @@ def chat(): # ЗМІНЕНО: прибрали async
 **НАДАНИЙ КОНТЕКСТ ІЗ ЗАКОНОДАВСТВА:**
 {retrieved_context if retrieved_context else "Для цього запиту релевантних документів у локальній базі знань не знайдено."}
 """
-
+        
         model = genai.GenerativeModel(
             model_name="gemini-1.5-flash",
             generation_config=generation_config,
             system_instruction=system_instruction
         )
-
-        # ЗМІНЕНО: Запускаємо асинхронну функцію в окремому циклі
-        response = asyncio.run(model.generate_content_async(user_message))
+        
+        # ПОВЕРНУЛИ ПРЯМИЙ AWAIT
+        response = await model.generate_content_async(user_message)
         bot_response_text = response.text
 
         try:
