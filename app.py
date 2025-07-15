@@ -5,8 +5,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 import traceback
-import asyncio
-from a2wsgi import ASGIMiddleware # <--- ДОДАНО ІМПОРТ
 
 # ====================================================================
 # 1. Ініціалізація Flask та CORS
@@ -48,7 +46,7 @@ def find_relevant_laws(query):
     legislation_dir = os.path.join(basedir, 'legislation')
     if not os.path.exists(legislation_dir):
         return ""
-
+    
     query_words = set(query.lower().split())
     found_fragments = []
 
@@ -77,12 +75,13 @@ else:
     print("ПОПЕРЕДЖЕННЯ: Змінна середовища GEMINI_API_KEY не встановлена.")
 
 generation_config = {"temperature": 0.7, "top_p": 1, "top_k": 1, "max_output_tokens": 2048}
+model = genai.GenerativeModel(model_name="gemini-1.5-flash", generation_config=generation_config)
 
 # ====================================================================
-# 6. Основний маршрут чату
+# 6. Основний маршрут чату (Синхронна версія)
 # ====================================================================
 @app.route('/api/chat', methods=['POST'])
-async def chat():
+def chat():
     if not api_key:
         return jsonify({"error": "API ключ не налаштовано на сервері."}), 500
 
@@ -96,6 +95,7 @@ async def chat():
     try:
         retrieved_context = find_relevant_laws(user_message)
 
+        # Створюємо чат-сесію з динамічним системним промптом
         system_instruction = f"""Ти — експертний віртуальний консультант для сайту vet25ua.onrender.com. Твоя спеціалізація — ветеринарія та законодавство України.
 Відповідай на запитання користувача, базуючись в першу чергу на НАДАНОМУ КОНТЕКСТІ. Якщо контекст релевантний, посилайся на нього.
 Якщо запитання не стосується ветеринарії, харчової промисловості або законодавства у цих сферах, ввічливо відмов.
@@ -104,13 +104,12 @@ async def chat():
 {retrieved_context if retrieved_context else "Для цього запиту релевантних документів у локальній базі знань не знайдено."}
 """
         
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            generation_config=generation_config,
-            system_instruction=system_instruction
-        )
+        chat_session = model.start_chat(history=[
+            {'role': 'user', 'parts': [system_instruction]},
+            {'role': 'model', 'parts': ["Так, я готовий допомогти."]}
+        ])
         
-        response = await model.generate_content_async(user_message)
+        response = chat_session.send_message(user_message)
         bot_response_text = response.text
 
         try:
@@ -140,12 +139,8 @@ def index():
     return "Бекенд чат-бота працює!"
 
 # ====================================================================
-# 7. Запуск додатку та Адаптер для ASGI
+# 7. Запуск додатку
 # ====================================================================
-
-# Створюємо "перекладач" для Gunicorn/Uvicorn
-asgi_app = ASGIMiddleware(app)
-
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
